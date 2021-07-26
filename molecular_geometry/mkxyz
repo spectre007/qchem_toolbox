@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+
+import sys
+import argparse
+import re
+import os
+
+def get_lvl_theory(lines, rem_line):
+    if rem_line == 0:
+        return ""
+    i = 0
+    d = {}
+    p_rem  = r"(?P<key>\w+)(\s+=?\s+|\s+)(?P<value>[a-zA-Z0-9_\-]+)"
+    while True:
+        line = lines[rem_line+i]
+        if "$end" in line:
+            break
+        m = re.search(p_rem, line)
+        if m:
+            d[m.group("key").lower()] = m.group("value")
+        i += 1
+    if d.keys() >= {"method", "basis"}:
+        return "/".join([d["method"], d["basis"]])
+    elif d.keys() >= {"exchange", "correlation", "basis"}:
+        method = ":".join([d["exchange"], d["correlation"]])
+        return "/".join([method, d["basis"]])
+
+
+parser = argparse.ArgumentParser(description='Get XYZ coordinates from Q-Chem optimization.')
+parser.add_argument('srcfile', metavar='out', nargs='+', help='output filename(s)')
+parser.add_argument('-o', dest='outfile', help='XYZ filename')
+
+args = parser.parse_args()
+
+# ------------------
+# Parse output files
+# ------------------
+for n, filename in enumerate(args.srcfile):
+    ext = filename[:-4]
+    l_rem = []
+    start, end = [], []
+    with open(filename) as f:
+        rl = f.readlines()
+    for i in range(len(rl)):
+        if "$rem" in rl[i]:
+            if len(rl[i].split()) < 2:
+                l_rem.append(i)
+        if "**  OPTIMIZATION CONVERGED  **" in rl[i]:
+            start.append(i+5)
+        if "Z-matrix Print:" in rl[i]:
+            end.append(i-1)
+
+    if len(start) != len(end):
+        raise IndexError("Start and end lists have different lengths!")
+    difflist = [end[k] - start[k] for k in range(len(start))]
+    if any([diff < 0 for diff in difflist]):
+        raise ValueError(("Difference of start and end is negative!"
+               "Are you using the correct file type (Q-Chem opt output) ?"))
+
+    # -------------
+    # write to file
+    # -------------
+    for k in range(len(start)):
+
+        lvl_theory = get_lvl_theory(rl, l_rem[k])
+        print(f"--- Geometry #{n}.{k} ---")
+        print(f"Number of Atoms: {difflist[k]}")
+        print(f"Level of theory: {lvl_theory}")
+        print(f"Extracted from : {os.path.basename(filename)}")
+
+        comment = f"  optimized at {lvl_theory}"
+        outfname = f"{ext}_{k:03d}.xyz" if args.outfile is None or len(start) > 1\
+            else args.outfile
+        with open(outfname, "w") as out:
+            out.write(f"{difflist[k]}\n{comment}\n")
+            for i in range(difflist[k]):
+                tmp = rl[start[k]+i].split()[1:]
+                if i == difflist[k]-1:
+                    out.write("{0:<4}{1:>17}{2:>17}{3:>17}".format(tmp[0],tmp[1],tmp[2],tmp[3]))
+                else:
+                    out.write("{0:<4}{1:>17}{2:>17}{3:>17}\n".format(tmp[0],tmp[1],tmp[2],tmp[3]))
+        print("XYZ file generated: ", outfname)
+
